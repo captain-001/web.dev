@@ -7,9 +7,9 @@
     "start": "nodemon src/index.js localhost 8080"
   },
   "dependencies": {
-    "ejs": "2.6.1",
-    "express": "4.16.4",
-    "socket.io": "2.2.0"
+    "ejs": "^2.6.1",
+    "express": "^4.16.4",
+    "socket.io": "^2.2.0"
   },
   "devDependencies": {
     "nodemon": "1.18.4"
