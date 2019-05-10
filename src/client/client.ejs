@@ -1,0 +1,281 @@
+<!doctype html>
+<html>
+<head>
+	<title>가위바위보</title>
+	<style>
+		.container {
+			text-align: center;
+			min-width: 500px;
+			margin: auto;
+		}
+		.button-normal {
+			width: 80px;
+			height: 80px;
+			opacity:0.5;
+		}
+	</style>
+
+	<script src="https://code.jquery.com/jquery-3.4.1.min.js"></script>
+	<script src='/socket.io/socket.io.js'></script>
+</head>
+
+<body>
+	
+	<div class="container">
+		<div>
+			<h1 style="border-bottom: 8px solid #57c4d0;display: inline;">방번호 : <%= room %></h1>
+		</div> 
+			
+		<h2>WebRTC DataChannel Example</h2>
+	
+		<div id="buttons">
+			<input id="scissorsButton" type='image' src="/res/1.jpg" class="button-normal">
+			<input id="rockButton" type='image' src="/res/2.jpg" class="button-normal" >
+			<input id="paperButton" type='image' src="/res/3.jpg" class="button-normal">	
+		</div>
+		<br>
+		<div id="logArea" 
+			style="text-align:left;
+			width: 500px;
+			margin :auto;
+			padding: 10px;
+			background-color: #cccccc;">
+		</div>
+
+	</div>
+
+
+		
+	<script src='/client/client.js'></script>
+
+	<script>
+	$(function() 
+	{
+		var room = String(<%=room%>);
+		var buttons = [ $("#scissorsButton"), $("#rockButton"), $("#paperButton")];
+
+		var socket = io();
+		var peer = new PeerClient();
+
+		var isMatched = false;
+
+		var localData = null;
+		var remoteData = null;
+
+		// 버튼은 채널이 연결된 이후 활성화
+		disableButtons( true );
+
+		// 서버에 연결됨
+		socket.on("connect", () => {
+			writeLog("서버에 연결됨");
+			console.log("send request to check room : " + room);
+
+			// 초기화
+			isMatched = false;
+			localData = null;
+			remoteData = null;
+
+			// 서버쪽에 방 접속 여부를 요청
+			socket.emit("request", room);
+		});
+
+		// 방 접속 요청 결과 , data.result
+		socket.on("response", result => {
+			console.log("join room, result : " + result);
+
+			switch( result ) {
+				case 0:
+					// 0 : 방 생성 후 참여
+					writeLog(room + "번 방에 참여하였습니다.");
+					break;
+
+				case 1:
+					// 1 : 존재하는 방에 참여
+					writeLog(room + "번 방에 참여하였습니다.");
+					isMatched = true;
+					break;
+
+				case 2:
+				default:
+					// 2 : 방이 가득참, 참여할 수 없음
+					writeLog(room + "번 방은 참여 불가능 합니다.");
+					socket.emit("disconnect");
+					break;
+			}
+		});
+
+		// 다른 사용자가 참여하면 Peer 를 초기화 한다.
+		socket.on("join", data => {
+			writeLog("다른 유저가 참여하였습니다.");
+			isMatched = true;
+			if( !peer.isAvailableConnection() ) {
+				initLocalPeerClient();
+			}			
+		});
+
+		// 시그널링을 위한 메시지 수신 루틴
+		// message 는 시그널링서버와 각 클라이언트간의 시그널링 용도로 사용됨
+		socket.on( "message", data => {
+			let msg = JSON.parse(data);
+			if( msg.sdp ) {
+				console.log("[SYNC] receive SDP message");
+				if( !peer.isAvailableConnection() ) {
+					initRemotePeerClient();
+				}
+				peer.setRemoteDescription( msg.sdp, sendSDPMessage );
+
+			} else if( msg.candidate ) {
+				console.log("[SYNC] receive Candidate message");
+				peer.setIceCandidate( msg );
+			}
+			
+		});
+
+
+
+		// 버튼 클릭이벤트
+		$("#scissorsButton").click( ()=> {
+			console.log("Scissors");
+			submitDataChannel(0);
+		});
+
+		$("#rockButton").click( ()=> {
+			console.log("Rock");
+			submitDataChannel(1);
+		});
+
+		$("#paperButton").click( ()=> {
+
+			console.log("Paper");
+			submitDataChannel(2);
+		});
+
+
+		// 로컬 RTCPeerConnection 생성 및 초기화
+		function initLocalPeerClient() {
+			if( isMatched === false ) {
+				return;
+			} 
+
+			peer.createConnection();
+			peer.initLocalConnection( 
+				sendSDPMessage, 
+				sendCandidateMessage,
+				receiveDataChannel
+			);
+		}
+
+
+		// 원격 RTCPeerConnection 생성 및 초기화
+		function initRemotePeerClient() {
+			if( isMatched === false ) {
+				return;
+			} 
+
+			peer.createConnection();
+			peer.initRemoteConnection( 
+				sendCandidateMessage,
+				receiveDataChannel
+			);
+		}
+
+		// SDP 메시지를 서버로 전달
+		function sendSDPMessage( data ) {
+			var msg = JSON.stringify({ sdp: data });
+			console.log("[SYNC] SDP : " + msg);
+			console.log("[SYNC] send SDP message");
+			socket.emit( "message",  { 'room':room, 'msg':msg});
+		}
+
+		// ICECandidate 메시지를 서버로 전달
+		function sendCandidateMessage( data ) {
+			var msg = JSON.stringify( { candidate: data} );
+			console.log("iceCallback" + msg);
+			console.log("[SYNC] send Candidate message");
+			socket.emit( "message", { 'room':room, 'msg':msg});
+		}
+
+		// 데이터 전달
+		function submitDataChannel( value ) {
+			if( !peer.isAvailableConnection() ){
+				return;
+			}
+
+			writeLog("[CH] 당신이 선택했습니다.");
+			peer.sendData( value );
+
+			localData = value;
+			disableButtons(true);
+			checkGameResult();
+		}
+
+		// 데이터 수신
+		function receiveDataChannel( msg ) {
+			console.log( msg.data );
+
+			if( msg.data == 999 ) {
+				writeLog("[CH] 데이터 채널이 연결되었습니다.");
+				disableButtons( false );
+			} else {
+				writeLog("[CH] 상대방이 선택했습니다.");
+				remoteData = msg.data;
+				checkGameResult();
+			}
+		}
+
+		function disableButtons( flag ) {
+			var op = 0.1;
+			
+			for( i=0; i<3; i++ ) {
+				if( flag === false || localData === i ) {
+					op = 1.0;
+				} else {
+					op = 0.1;
+				}
+				
+				buttons[i].animate({opacity: op}, 1000);
+				buttons[i].prop('disabled', flag);
+			}
+
+
+			
+			//$("#rockButton").animate({opacity: op}, 1000);
+			//$("#paperButton").animate({opacity: op}, 1000);
+			//$("#scissorsButton").animate({opacity: op}, 1000);
+		}
+
+		function checkGameResult() {
+			// 단순히 승패 결정
+			console.log( "local="+localData+",remote="+remoteData);
+
+			if( localData != null && remoteData != null ) {
+				peer.closeConnection();
+
+				if( localData == remoteData ) {
+					// 무승부
+					writeLog("무승부입니다.");
+					return;
+				} 
+
+				if( (localData == 0 && remoteData == 2 ) ||
+						(localData == 1 && remoteData == 0 ) ||
+						(localData == 2 && remoteData == 1 ) ) {
+					writeLog("승리했습니다.");
+				} else {
+					writeLog("패배했습니다.");
+				}
+			}
+		}
+
+		function writeLog( msg ) {
+			var date = new Date();
+			var currentTime = date.getHours() + "시 " + date.getMinutes() + "분 " + date.getSeconds() + "초";
+
+			$("#logArea").append(
+				"<div>" + currentTime+ " : "+msg + "</div>"
+			);
+		}
+	});
+	</script>
+</body>
+</html>
